@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Background Remover & Replacer</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: linear-gradient(to right, #6a11cb, #2575fc);
+      color: #fff;
+      margin: 0;
+      padding: 0;
+      text-align: center;
+    }
+    h1 {
+      margin-top: 20px;
+    }
+    .container {
+      background: #ffffff20;
+      padding: 20px;
+      margin: 20px auto;
+      border-radius: 10px;
+      width: 90%;
+      max-width: 900px;
+      backdrop-filter: blur(10px);
+    }
+    input[type="file"], select {
+      margin: 10px 0;
+    }
+    .button {
+      background: linear-gradient(to right, #11998e, #38ef7d);
+      border: none;
+      padding: 10px 20px;
+      color: Blue Grey;
+      border-radius: 8px;
+      cursor: pointer;
+      margin: 10px;
+    }
+    .button:hover {
+      opacity: 0.9;
+    }
+    .images-container {
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+      flex-wrap: wrap;
+      margin-top: 20px;
+    }
+    .image-box {
+      position: relative;
+      max-width: 400px;
+      background-color: white;
+      padding: 10px;
+      border-radius: 8px;
+    }
+    canvas, img {
+      max-width: 100%;
+      border-radius: 6px;
+    }
+    .slider-box {
+      margin: 10px;
+    }
+    label {
+      display: block;
+      margin-top: 10px;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <h1>Background Remover & Replacer</h1>
+  <div class="container">
+    <input type="file" id="imageInput" accept="image/*" />
+    <br/>
+    <button class="button" onclick="removeBackground()">Remove Background</button>
+    <br/>
+    <select id="bgSelect">
+      <option value="">Replace Background With...</option>
+      <option value="white">White</option>
+      <option value="black">Black</option>
+      <option value="custom">Custom Color</option>
+      <option value="upload">Upload Image</option>
+    </select>
+    <input type="color" id="customColor" style="display:none;" />
+    <input type="file" id="bgImageUpload" accept="image/*" style="display:none;" />
+
+    <div class="slider-box">
+      <label>Foreground Brightness</label>
+      <input type="range" id="fgBrightness" min="0" max="200" value="100" />
+      <label>Final Image Brightness</label>
+      <input type="range" id="finalBrightness" min="0" max="200" value="100" />
+      <label>Scale Foreground</label>
+      <input type="range" id="scaleSlider" min="0.1" max="3" step="0.1" value="1" />
+    </div>
+
+    <div class="images-container" id="imagesContainer" style="display:none;">
+      <div class="image-box">
+        <p>Original Image</p>
+        <img id="originalImage" src="" />
+      </div>
+      <div class="image-box">
+        <p>Processed Image</p>
+        <canvas id="processedCanvas"></canvas>
+      </div>
+    </div>
+    <a id="downloadBtn" class="button" download="no-bg.png" style="display:none;">Download Final</a>
+  </div>
+
+  <script>
+    let originalFile;
+    let outputBlob;
+    let removedImage = new Image();
+    let fgBrightness = 100;
+    let finalBrightness = 100;
+    let scale = 1;
+    let offsetX = 0;
+    let offsetY = 0;
+    let dragging = false;
+    let dragStart = { x: 0, y: 0 };
+
+    const originalImage = document.getElementById('originalImage');
+    const processedCanvas = document.getElementById('processedCanvas');
+    const ctx = processedCanvas.getContext("2d");
+
+    processedCanvas.addEventListener("mousedown", (e) => {
+      dragging = true;
+      dragStart.x = e.offsetX;
+      dragStart.y = e.offsetY;
+    });
+
+    processedCanvas.addEventListener("mouseup", () => dragging = false);
+    processedCanvas.addEventListener("mouseleave", () => dragging = false);
+    processedCanvas.addEventListener("mousemove", (e) => {
+      if (dragging) {
+        offsetX += e.offsetX - dragStart.x;
+        offsetY += e.offsetY - dragStart.y;
+        dragStart.x = e.offsetX;
+        dragStart.y = e.offsetY;
+        updateCanvasBackground();
+      }
+    });
+
+    document.getElementById('imageInput').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) {
+        originalFile = file;
+        const reader = new FileReader();
+        reader.onload = () => {
+          originalImage.src = reader.result;
+        };
+        reader.readAsDataURL(file);
+      }
+    });
+
+    document.getElementById('bgSelect').addEventListener('change', (e) => {
+      const value = e.target.value;
+      document.getElementById('customColor').style.display = value === 'custom' ? 'inline' : 'none';
+      document.getElementById('bgImageUpload').style.display = value === 'upload' ? 'inline' : 'none';
+      if (removedImage.src) updateCanvasBackground();
+    });
+
+    document.getElementById('customColor').addEventListener('input', updateCanvasBackground);
+    document.getElementById('bgImageUpload').addEventListener('change', updateCanvasBackground);
+
+    document.getElementById('fgBrightness').addEventListener('input', (e) => {
+      fgBrightness = parseInt(e.target.value);
+      if (removedImage.src) updateCanvasBackground();
+    });
+
+    document.getElementById('finalBrightness').addEventListener('input', (e) => {
+      finalBrightness = parseInt(e.target.value);
+      if (removedImage.src) updateCanvasBackground();
+    });
+
+    document.getElementById('scaleSlider').addEventListener('input', (e) => {
+      scale = parseFloat(e.target.value);
+      if (removedImage.src) updateCanvasBackground();
+    });
+
+    async function removeBackground() {
+      if (!originalFile) return alert("Upload an image first!");
+      const formData = new FormData();
+      formData.append("image_file", originalFile);
+      formData.append("size", "auto");
+
+      const response = await fetch("https://api.remove.bg/v1.0/removebg", {
+        method: "POST",
+        headers: {
+          "X-Api-Key": "AmxomDGKjTfe8Vno3iduBAJK"
+        },
+        body: formData
+      });
+
+      if (!response.ok) return alert("Failed to remove background");
+
+      const blob = await response.blob();
+      outputBlob = blob;
+      removedImage.src = URL.createObjectURL(blob);
+      removedImage.onload = () => {
+        offsetX = 0;
+        offsetY = 0;
+        updateCanvasBackground();
+        document.getElementById('imagesContainer').style.display = 'flex';
+        document.getElementById('downloadBtn').style.display = 'inline-block';
+      };
+    }
+
+    function updateCanvasBackground() {
+      const canvas = processedCanvas;
+      const value = document.getElementById('bgSelect').value;
+      const customColor = document.getElementById('customColor').value;
+      const bgImgFile = document.getElementById('bgImageUpload').files[0];
+
+      canvas.width = removedImage.width;
+      canvas.height = removedImage.height;
+
+      ctx.save();
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.filter = `brightness(${finalBrightness}%)`;
+
+      if (value === "white" || value === "black") {
+        ctx.fillStyle = value;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        drawForeground();
+      } else if (value === "custom") {
+        ctx.fillStyle = customColor;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        drawForeground();
+      } else if (value === "upload" && bgImgFile) {
+        const bgReader = new FileReader();
+        bgReader.onload = () => {
+          const bgImg = new Image();
+          bgImg.src = bgReader.result;
+          bgImg.onload = () => {
+            ctx.drawImage(bgImg, 0, 0, canvas.width, canvas.height);
+            drawForeground();
+          };
+        };
+        bgReader.readAsDataURL(bgImgFile);
+      } else {
+        drawForeground();
+      }
+
+      ctx.restore();
+      document.getElementById('downloadBtn').href = canvas.toDataURL();
+    }
+
+    function drawForeground() {
+      ctx.save();
+      ctx.filter = `brightness(${fgBrightness}%)`;
+      const drawWidth = removedImage.width * scale;
+      const drawHeight = removedImage.height * scale;
+      const x = offsetX + (processedCanvas.width - drawWidth) / 2;
+      const y = offsetY + (processedCanvas.height - drawHeight) / 2;
+      ctx.drawImage(removedImage, x, y, drawWidth, drawHeight);
+      ctx.restore();
+    }
+  </script>
+</body>
+</html>
